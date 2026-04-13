@@ -9,8 +9,7 @@ import {
   Plus,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-
-type Role = "student" | "admin";
+import { useCampusRole, ROLE_STORAGE_KEY } from "@/lib/useCampusRole";
 
 type ComplaintStatus = "Open" | "Resolved";
 
@@ -22,13 +21,10 @@ type Complaint = {
   created_at?: string | null;
 };
 
-const ROLE_STORAGE_KEY = "campusos-role";
-
 const categories = ["Electrical", "WiFi", "Hostel", "Maintenance"] as const;
 
 export default function ComplaintsPage() {
-  const [role, setRole] = useState<Role | null>(null);
-  const [roleReady, setRoleReady] = useState(false);
+  const { role, ready: roleReady } = useCampusRole();
 
   const [category, setCategory] = useState<(typeof categories)[number]>(
     "Electrical"
@@ -45,17 +41,6 @@ export default function ComplaintsPage() {
   const [statusFilter, setStatusFilter] = useState<ComplaintStatus | "All">(
     "All"
   );
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const storedRole = window.localStorage.getItem(ROLE_STORAGE_KEY);
-    if (storedRole === "student" || storedRole === "admin") {
-      setRole(storedRole);
-    }
-
-    setRoleReady(true);
-  }, []);
 
   useEffect(() => {
     if (!roleReady || role !== "admin") return;

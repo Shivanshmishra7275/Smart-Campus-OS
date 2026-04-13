@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   LayoutDashboard,
   Users,
@@ -465,7 +466,10 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="mt-4 grid grid-cols-3 gap-2 text-[11px]">
-            <div className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+            <Link
+              href="/attendance"
+              className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3 transition-colors hover:border-emerald-400/60 hover:bg-emerald-500/5"
+            >
               <div className="flex items-center gap-2">
                 <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/15 border border-emerald-500/40">
                   <QrCode className="h-3.5 w-3.5 text-emerald-400" />
@@ -475,8 +479,11 @@ export default function DashboardPage() {
                   <p className="text-[10px] text-slate-500">Simulated QR</p>
                 </div>
               </div>
-            </div>
-            <div className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+            </Link>
+            <Link
+              href="/complaints"
+              className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3 transition-colors hover:border-amber-400/60 hover:bg-amber-500/5"
+            >
               <div className="flex items-center gap-2">
                 <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/15 border border-amber-500/40">
                   <MessageSquareWarning className="h-3.5 w-3.5 text-amber-300" />
@@ -486,8 +493,11 @@ export default function DashboardPage() {
                   <p className="text-[10px] text-slate-500">Supabase tickets</p>
                 </div>
               </div>
-            </div>
-            <div className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+            </Link>
+            <Link
+              href="/map"
+              className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3 transition-colors hover:border-sky-400/60 hover:bg-sky-500/5"
+            >
               <div className="flex items-center gap-2">
                 <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/15 border border-sky-500/40">
                   <Map className="h-3.5 w-3.5 text-sky-300" />
@@ -497,7 +507,7 @@ export default function DashboardPage() {
                   <p className="text-[10px] text-slate-500">Indoor routes</p>
                 </div>
               </div>
-            </div>
+            </Link>
           </div>
         </GlassCard>
       </div>

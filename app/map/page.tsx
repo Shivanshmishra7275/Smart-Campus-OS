@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { MapPin, Navigation, Search, Wifi, Activity } from "lucide-react";
+import { useMemo, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
+import { Navigation, Search, Wifi, Activity, Locate } from "lucide-react";
+import type { CampusLocationWithCoords, UserLocation } from "@/components/CampusMap";
 
 type LocationType = "Academic" | "Dining" | "Health" | "Sports" | "Admin";
 
@@ -12,6 +14,8 @@ type Location = {
   floor: string;
   occupancy: number; // 0-100
   status: "Calm" | "Busy" | "Peak";
+  lat: number;
+  lng: number;
 };
 
 const locations: Location[] = [
@@ -22,6 +26,8 @@ const locations: Location[] = [
     floor: "Ground Floor",
     occupancy: 78,
     status: "Busy",
+    lat: 12.9718,
+    lng: 77.5933,
   },
   {
     id: 2,
@@ -30,6 +36,8 @@ const locations: Location[] = [
     floor: "Floor 1–3",
     occupancy: 64,
     status: "Busy",
+    lat: 12.9721,
+    lng: 77.594,
   },
   {
     id: 3,
@@ -38,6 +46,8 @@ const locations: Location[] = [
     floor: "Ground Floor",
     occupancy: 91,
     status: "Peak",
+    lat: 12.9715,
+    lng: 77.5925,
   },
   {
     id: 4,
@@ -46,6 +56,8 @@ const locations: Location[] = [
     floor: "Ground Floor",
     occupancy: 34,
     status: "Calm",
+    lat: 12.9724,
+    lng: 77.5928,
   },
   {
     id: 5,
@@ -54,6 +66,8 @@ const locations: Location[] = [
     floor: "Ground Floor",
     occupancy: 57,
     status: "Busy",
+    lat: 12.972,
+    lng: 77.5938,
   },
   {
     id: 6,
@@ -62,6 +76,8 @@ const locations: Location[] = [
     floor: "Floor 2",
     occupancy: 42,
     status: "Calm",
+    lat: 12.9719,
+    lng: 77.5945,
   },
 ];
 
@@ -88,14 +104,83 @@ const filters: ({ label: string; value: "all" } | { label: string; value: Locati
   { label: "Admin", value: "Admin" },
 ];
 
+const DynamicCampusMap = dynamic(() => import("@/components/CampusMap"), {
+  ssr: false,
+});
+
+function toCampusLocationWithCoords(location: Location): CampusLocationWithCoords {
+  return {
+    id: location.id,
+    name: location.name,
+    lat: location.lat,
+    lng: location.lng,
+  };
+}
+
+function haversineDistanceMeters(a: UserLocation, b: { lat: number; lng: number }): number {
+  const R = 6371000; // metres
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+
+  const c =
+    sinDLat * sinDLat +
+    Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng;
+
+  const d = 2 * Math.atan2(Math.sqrt(c), Math.sqrt(1 - c));
+  return R * d;
+}
+
 export default function MapPage() {
   const [query, setQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]["value"]>("all");
   const [selectedId, setSelectedId] = useState<number>(1);
+  const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+
+  const handleLocateMe = useCallback(() => {
+    if (!("geolocation" in navigator)) {
+      setLocationError("Location services are not supported in this browser.");
+      return;
+    }
+
+    setLocationError(null);
+    setLocating(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocating(false);
+        setUserLocation({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        });
+      },
+      (err) => {
+        setLocating(false);
+        if (err.code === err.PERMISSION_DENIED) {
+          setLocationError("Location permission denied. Please allow access and try again.");
+        } else {
+          setLocationError("Unable to fetch your location right now.");
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 30000,
+      }
+    );
+  }, []);
 
   const filteredLocations = useMemo(() => {
     const lower = query.toLowerCase();
-    return locations.filter((loc) => {
+    const base = locations.filter((loc) => {
       const matchesFilter =
         activeFilter === "all" ? true : loc.type === activeFilter;
       const matchesQuery =
@@ -104,7 +189,14 @@ export default function MapPage() {
         loc.type.toLowerCase().includes(lower);
       return matchesFilter && matchesQuery;
     });
-  }, [query, activeFilter]);
+    if (!userLocation) return base;
+
+    return [...base].sort((a, b) => {
+      const da = haversineDistanceMeters(userLocation, a);
+      const db = haversineDistanceMeters(userLocation, b);
+      return da - db;
+    });
+  }, [query, activeFilter, userLocation]);
 
   const selectedLocation = useMemo(
     () => locations.find((l) => l.id === selectedId) ?? locations[0],
@@ -167,32 +259,33 @@ export default function MapPage() {
                 Interactive Map Shell
               </span>
             </div>
-            <div className="flex items-center gap-2 text-[11px] text-slate-400">
-              <Wifi className="h-3.5 w-3.5 text-emerald-400" />
-              <span>Indoor positioning ready</span>
+            <div className="flex items-center gap-3 text-[11px] text-slate-400">
+              <div className="flex items-center gap-1.5">
+                <Wifi className="h-3.5 w-3.5 text-emerald-400" />
+                <span>Live location enabled</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleLocateMe}
+                className="inline-flex items-center gap-1.5 rounded-full bg-slate-900 border border-slate-700 px-2.5 py-1 text-[11px] font-medium text-slate-200 hover:border-cyan-500 hover:text-cyan-200"
+              >
+                <Locate className="h-3.5 w-3.5" />
+                <span>{locating ? "Locating…" : "Locate me"}</span>
+              </button>
             </div>
           </div>
 
-          <div className="relative flex-1 min-h-72 m-4 rounded-2xl border border-dashed border-slate-700 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 overflow-hidden">
-            {/* Pulsing hotspot for selected location */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="relative flex flex-col items-center gap-2">
-                <span className="absolute inline-flex h-24 w-24 rounded-full bg-cyan-500/20 animate-ping" />
-                <span className="relative flex h-16 w-16 items-center justify-center rounded-full bg-slate-950 border border-cyan-500/60 shadow-[0_0_35px_rgba(34,211,238,0.45)]">
-                  <MapPin className="h-7 w-7 text-cyan-300" />
-                </span>
-                <div className="relative mt-3 rounded-full border border-slate-700/80 bg-slate-900/90 px-4 py-1.5 text-[11px] text-slate-200 flex items-center gap-2">
-                  <span className="font-semibold text-cyan-300">
-                    {selectedLocation.name}
-                  </span>
-                  <span className="text-slate-500">•</span>
-                  <span className="text-slate-400">{selectedLocation.floor}</span>
-                </div>
-              </div>
-            </div>
+          <div className="relative flex-1 bg-slate-950">
+            <DynamicCampusMap
+              selectedLocation={toCampusLocationWithCoords(selectedLocation)}
+              allLocations={locations.map(toCampusLocationWithCoords)}
+              userLocation={userLocation}
+              onLocateMe={handleLocateMe}
+              locating={locating}
+            />
 
-            {/* Mini status strip */}
-            <div className="absolute bottom-4 left-4 right-4 flex flex-col gap-2 text-[11px] text-slate-300">
+            {/* Status strip */}
+            <div className="absolute bottom-4 left-4 right-4 flex flex-col gap-2 text-[11px] text-slate-300 pointer-events-none">
               <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-950/80 border border-slate-700/80 px-4 py-2">
                 <div className="flex items-center gap-2">
                   <Activity className="h-3.5 w-3.5 text-cyan-400" />
@@ -218,6 +311,22 @@ export default function MapPage() {
                   {selectedLocation.occupancy}%
                 </span>
               </div>
+              {userLocation && (
+                <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-950/80 border border-slate-800/80 px-4 py-2">
+                  <div className="flex items-center gap-2 text-slate-400">
+                    <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Your position is active</span>
+                  </div>
+                  <span className="text-[10px] text-slate-400">
+                    {userLocation.lat.toFixed(5)}, {userLocation.lng.toFixed(5)}
+                  </span>
+                </div>
+              )}
+              {locationError && (
+                <div className="rounded-xl bg-rose-500/10 border border-rose-500/40 px-4 py-2 text-[11px] text-rose-200">
+                  {locationError}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -263,6 +372,19 @@ export default function MapPage() {
                       {loc.status}
                     </span>
                   </div>
+                  {userLocation && (
+                    <div className="mt-1 flex items-center gap-1 text-[10px] text-slate-500">
+                      <span className="inline-block h-1 w-1 rounded-full bg-emerald-400" />
+                      <span>
+                        {(() => {
+                          const meters = haversineDistanceMeters(userLocation, loc);
+                          if (meters < 50) return "You are here";
+                          if (meters < 1000) return `${Math.round(meters)} m from you`;
+                          return `${(meters / 1000).toFixed(2)} km from you`;
+                        })()}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   <span className="text-xs text-slate-300 tabular-nums">
