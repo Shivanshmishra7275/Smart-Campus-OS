@@ -1,7 +1,15 @@
+"use client";
+
 import Link from "next/link";
 import { GraduationCap, ShieldCheck, Cpu } from "lucide-react";
 
 export default function LoginPage() {
+  const handleLogin = (role: "student" | "admin") => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("campusos-role", role);
+    }
+  };
+
   return (
     <div className="relative min-h-screen flex flex-col items-center justify-center bg-slate-950 overflow-hidden px-4">
       {/* Ambient glow blobs */}
@@ -31,6 +39,7 @@ export default function LoginPage() {
         <div className="w-full flex flex-col gap-4">
           <Link
             href="/dashboard"
+            onClick={() => handleLogin("student")}
             className="flex items-center justify-center gap-3 w-full py-4 px-6 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-[0.98] text-slate-950 font-bold text-lg transition-all duration-150 shadow-lg shadow-cyan-500/25"
           >
             <GraduationCap size={22} />
@@ -39,6 +48,7 @@ export default function LoginPage() {
 
           <Link
             href="/dashboard"
+            onClick={() => handleLogin("admin")}
             className="flex items-center justify-center gap-3 w-full py-4 px-6 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-white font-bold text-lg border border-slate-600/60 transition-all duration-150"
           >
             <ShieldCheck size={22} className="text-cyan-400" />
