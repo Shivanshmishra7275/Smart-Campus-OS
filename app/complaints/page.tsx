@@ -50,6 +50,7 @@ export default function ComplaintsPage() {
     // TODO: connect to Supabase
     setTitle("");
     setDescription("");
+    setCategory("Infrastructure");
     setShowForm(false);
   };
 
