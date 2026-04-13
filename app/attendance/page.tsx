@@ -13,6 +13,7 @@ type AttendanceRecord = {
 };
 
 const ROLE_STORAGE_KEY = "campusos-role";
+const STUDENT_NAME_KEY = "campusos-student-name";
 
 export default function AttendancePage() {
   const { role, ready: roleReady } = useCampusRole();
@@ -25,6 +26,16 @@ export default function AttendancePage() {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [recordsError, setRecordsError] = useState<string | null>(null);
+
+  const [studentName, setStudentName] = useState("Shivansh Mishra");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(STUDENT_NAME_KEY);
+    if (stored) {
+      setStudentName(stored);
+    }
+  }, []);
 
   useEffect(() => {
     if (!roleReady || role !== "admin") return;
@@ -66,9 +77,11 @@ export default function AttendancePage() {
     setScanState("loading");
 
     try {
+      const nameToUse = studentName.trim() || "Student";
+
       const { error } = await supabase.from("attendance").insert([
         {
-          student_id: "Shivansh Mishra",
+          student_id: nameToUse,
           status: "Present",
         },
       ]);
@@ -98,7 +111,7 @@ export default function AttendancePage() {
       }
 
       setScanState("success");
-      setScanMessage("Attendance marked successfully for Shivansh Mishra.");
+      setScanMessage(`Attendance marked successfully for ${nameToUse}.`);
     } catch {
       setScanState("error");
       setScanMessage(
@@ -182,6 +195,30 @@ export default function AttendancePage() {
               </span>
             </div>
 
+            <div className="relative z-10 mb-5 space-y-1">
+              <p className="text-xs font-semibold text-slate-200">
+                Who is checking in?
+              </p>
+              <div className="flex flex-col gap-1.5 max-w-xs">
+                <input
+                  type="text"
+                  value={studentName}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setStudentName(value);
+                    if (typeof window !== "undefined") {
+                      window.localStorage.setItem(STUDENT_NAME_KEY, value);
+                    }
+                  }}
+                  placeholder="Enter your full name"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/60"
+                />
+                <p className="text-[11px] text-slate-500">
+                  This name is written into the attendance record in Supabase.
+                </p>
+              </div>
+            </div>
+
             <div className="relative mx-auto flex aspect-square max-w-md items-center justify-center rounded-3xl border border-cyan-500/60 bg-slate-950/80 shadow-[0_0_40px_rgba(34,211,238,0.35)]">
               <div className="pointer-events-none absolute inset-6 rounded-[1.75rem] border border-dashed border-cyan-500/40" />
               <div className="pointer-events-none absolute inset-x-10 top-1/2 h-px -translate-y-1/2 bg-gradient-to-r from-transparent via-cyan-400/80 to-transparent animate-pulse" />
@@ -193,7 +230,7 @@ export default function AttendancePage() {
                 className="relative flex h-44 w-44 flex-col items-center justify-center gap-2 rounded-full bg-cyan-500 text-slate-950 shadow-[0_0_45px_rgba(34,211,238,0.75)] transition-transform hover:scale-105 hover:bg-cyan-400 active:scale-95 disabled:cursor-not-allowed disabled:opacity-80"
               >
                 <div className="absolute inset-1 rounded-full border border-white/30" />
-                <ScanLine className="relative h-10 w-10" />
+                <QrCode className="relative h-10 w-10" />
                 <span className="relative text-xs font-semibold tracking-wide uppercase">
                   {scanState === "loading" ? "Simulating..." : "Simulate QR Scan"}
                 </span>
@@ -229,11 +266,11 @@ export default function AttendancePage() {
             <ul className="space-y-2 text-xs text-slate-400">
               <li className="flex items-center gap-2">
                 <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
-                We write
+                We write your chosen
                 <span className="mx-1 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-100">
-                  student_id: &quot;Shivansh Mishra&quot;
+                  student_id
                 </span>
-                and
+                and a
                 <span className="ml-1 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300">
                   status: &quot;Present&quot;
                 </span>
