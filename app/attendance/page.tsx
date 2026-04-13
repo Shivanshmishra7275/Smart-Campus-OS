@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertCircle, QrCode, ScanLine, ShieldCheck } from "lucide-react";
+import { AlertCircle, QrCode, ShieldCheck } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useCampusRole } from "@/lib/useCampusRole";
 
@@ -27,15 +27,13 @@ export default function AttendancePage() {
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [recordsError, setRecordsError] = useState<string | null>(null);
 
-  const [studentName, setStudentName] = useState("Shivansh Mishra");
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem(STUDENT_NAME_KEY);
-    if (stored) {
-      setStudentName(stored);
+  const [studentName, setStudentName] = useState(() => {
+    if (typeof window === "undefined") {
+      return "Shivansh Mishra";
     }
-  }, []);
+    const stored = window.localStorage.getItem(STUDENT_NAME_KEY);
+    return stored || "Shivansh Mishra";
+  });
 
   useEffect(() => {
     if (!roleReady || role !== "admin") return;
@@ -310,6 +308,36 @@ export default function AttendancePage() {
           </div>
         )}
 
+        {!recordsLoading && records.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-300">
+            {(() => {
+              const { total, present, absent } = getTodayStats(records);
+              return (
+                <>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-900/80 px-3 py-1 border border-slate-700/70">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="font-semibold">Today</span>
+                    <span className="text-slate-500">•</span>
+                    <span className="tabular-nums text-emerald-300">
+                      {present} present
+                    </span>
+                    <span className="text-slate-500">/</span>
+                    <span className="tabular-nums text-slate-200">
+                      {total} events
+                    </span>
+                  </span>
+                  {total > present && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-3 py-1 border border-rose-500/40 text-rose-100">
+                      <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+                      <span className="tabular-nums">{absent} marked absent/other</span>
+                    </span>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
+
         <div className="overflow-hidden rounded-xl border border-slate-800/80 bg-slate-950/60">
           <table className="min-w-full divide-y divide-slate-800/90 text-sm">
             <thead className="bg-slate-950/80">
@@ -401,4 +429,24 @@ function formatTimestamp(value?: string | null) {
   } catch {
     return value;
   }
+}
+
+function getTodayStats(records: AttendanceRecord[]) {
+  const today = new Date().toDateString();
+  let total = 0;
+  let present = 0;
+
+  for (const record of records) {
+    if (!record.timestamp) continue;
+    const recordDate = new Date(record.timestamp);
+    if (recordDate.toDateString() !== today) continue;
+
+    total += 1;
+    if (record.status === "Present") {
+      present += 1;
+    }
+  }
+
+  const absent = Math.max(total - present, 0);
+  return { total, present, absent };
 }

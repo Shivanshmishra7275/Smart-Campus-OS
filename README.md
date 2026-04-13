@@ -317,6 +317,15 @@ views → resolution.
 	- Deploy — Next.js app is static‑first so it just works.
 
 ---
+## 🔮 Future Work
+
+- Integrate a real QR scanner using the device camera.
+- Add role-based authentication using Supabase Auth/SSO.
+- Replace the map shell with live indoor maps (Mapbox/Leaflet/custom SVG).
+- Ingest IoT and sensor data for real-time occupancy and energy insights.
+- Build richer analytics dashboards for admins with trends and heatmaps.
+
+---
 
 ## 👥 Team & Credits
 

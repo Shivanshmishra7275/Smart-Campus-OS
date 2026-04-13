@@ -42,6 +42,9 @@ export default function ComplaintsPage() {
   const [complaintsLoading, setComplaintsLoading] = useState(false);
   const [complaintsError, setComplaintsError] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [statusFilter, setStatusFilter] = useState<ComplaintStatus | "All">(
+    "All"
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -345,6 +348,32 @@ export default function ComplaintsPage() {
             </div>
           )}
 
+          <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-300">
+            <span className="text-slate-400">
+              {complaints.length} total complaints
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {["All", "Open", "Resolved"].map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() =>
+                    setStatusFilter(
+                      label === "All" ? "All" : (label as ComplaintStatus)
+                    )
+                  }
+                  className={`px-3 py-1.5 rounded-full border text-[11px] font-medium transition-colors ${
+                    statusFilter === label
+                      ? "border-cyan-500/80 bg-cyan-500/10 text-cyan-200"
+                      : "border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-500 hover:text-slate-200"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
             {complaintsLoading ? (
               <div className="col-span-full flex items-center justify-center rounded-2xl border border-slate-700/60 bg-slate-900/80 px-6 py-10 text-xs text-slate-400">
@@ -356,7 +385,13 @@ export default function ComplaintsPage() {
                 No complaints have been filed yet.
               </div>
             ) : (
-              complaints.map((complaint) => {
+              complaints
+                .filter((complaint) =>
+                  statusFilter === "All"
+                    ? true
+                    : complaint.status === statusFilter
+                )
+                .map((complaint) => {
                 const isOpen = complaint.status === "Open";
 
                 return (
