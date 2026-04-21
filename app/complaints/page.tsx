@@ -1,34 +1,87 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
-  CheckCircle,
+  CheckCircle2,
+  Clock3,
+  Filter,
   Loader2,
   Megaphone,
   Plus,
+  Search,
+  Shield,
+  Siren,
+  Wrench,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { useCampusRole, ROLE_STORAGE_KEY } from "@/lib/useCampusRole";
+import { ROLE_STORAGE_KEY, useCampusRole } from "@/lib/useCampusRole";
 
 type ComplaintStatus = "Open" | "Resolved";
+type Severity = "Low" | "Medium" | "High";
 
 type Complaint = {
-  id: number;
+  id: number | string;
   category: string;
   description: string;
   status: ComplaintStatus;
   created_at?: string | null;
 };
 
-const categories = ["Electrical", "WiFi", "Hostel", "Maintenance"] as const;
+type EnrichedComplaint = Complaint & {
+  severity: Severity;
+  cleanDescription: string;
+  slaHours: number;
+};
+
+const CATEGORIES = ["Electrical", "WiFi", "Hostel", "Maintenance", "Transport"] as const;
+
+function formatTimestamp(value?: string | null) {
+  if (!value) return "No timestamp";
+
+  try {
+    return new Date(value).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  } catch {
+    return value;
+  }
+}
+
+function parseSeverity(description: string): { severity: Severity; cleanDescription: string } {
+  const match = description.match(/^\[(LOW|MEDIUM|HIGH)\]\s*/i);
+
+  if (!match) {
+    return {
+      severity: "Medium",
+      cleanDescription: description,
+    };
+  }
+
+  const token = match[1].toUpperCase();
+  const severity = token.charAt(0) + token.slice(1).toLowerCase();
+
+  return {
+    severity: severity as Severity,
+    cleanDescription: description.replace(/^\[(LOW|MEDIUM|HIGH)\]\s*/i, ""),
+  };
+}
+
+function getSlaHours(createdAt?: string | null) {
+  if (!createdAt) return 0;
+  const created = new Date(createdAt).getTime();
+  if (!Number.isFinite(created)) return 0;
+
+  const diffMs = Date.now() - created;
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60)));
+}
 
 export default function ComplaintsPage() {
   const { role, ready: roleReady } = useCampusRole();
 
-  const [category, setCategory] = useState<(typeof categories)[number]>(
-    "Electrical"
-  );
+  const [category, setCategory] = useState<(typeof CATEGORIES)[number]>("Electrical");
+  const [severity, setSeverity] = useState<Severity>("Medium");
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
@@ -37,13 +90,15 @@ export default function ComplaintsPage() {
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [complaintsLoading, setComplaintsLoading] = useState(false);
   const [complaintsError, setComplaintsError] = useState<string | null>(null);
-  const [resolvingId, setResolvingId] = useState<number | null>(null);
-  const [statusFilter, setStatusFilter] = useState<ComplaintStatus | "All">(
-    "All"
-  );
+  const [resolvingId, setResolvingId] = useState<number | string | null>(null);
+  const [batchResolving, setBatchResolving] = useState(false);
+
+  const [statusFilter, setStatusFilter] = useState<ComplaintStatus | "All">("All");
+  const [severityFilter, setSeverityFilter] = useState<Severity | "All">("All");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
-    if (!roleReady || role !== "admin") return;
+    if (!roleReady || !role) return;
 
     let cancelled = false;
 
@@ -53,7 +108,7 @@ export default function ComplaintsPage() {
 
       const { data, error } = await supabase
         .from("complaints")
-        .select("*")
+        .select("id, category, description, status, created_at")
         .order("created_at", { ascending: false });
 
       if (cancelled) return;
@@ -75,42 +130,84 @@ export default function ComplaintsPage() {
     };
   }, [roleReady, role]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const enrichedComplaints = useMemo<EnrichedComplaint[]>(() => {
+    return complaints.map((complaint) => {
+      const parsed = parseSeverity(complaint.description);
+      return {
+        ...complaint,
+        severity: parsed.severity,
+        cleanDescription: parsed.cleanDescription,
+        slaHours: getSlaHours(complaint.created_at),
+      };
+    });
+  }, [complaints]);
+
+  const visibleComplaints = useMemo(() => {
+    const lower = searchQuery.trim().toLowerCase();
+
+    return enrichedComplaints.filter((complaint) => {
+      const matchesStatus = statusFilter === "All" ? true : complaint.status === statusFilter;
+      const matchesSeverity =
+        severityFilter === "All" ? true : complaint.severity === severityFilter;
+      const matchesSearch =
+        lower.length === 0
+          ? true
+          : complaint.category.toLowerCase().includes(lower) ||
+            complaint.cleanDescription.toLowerCase().includes(lower);
+
+      return matchesStatus && matchesSeverity && matchesSearch;
+    });
+  }, [enrichedComplaints, searchQuery, severityFilter, statusFilter]);
+
+  const analytics = useMemo(() => {
+    const open = enrichedComplaints.filter((item) => item.status === "Open");
+    const resolved = enrichedComplaints.filter((item) => item.status === "Resolved");
+    const high = open.filter((item) => item.severity === "High");
+    const slaRisk = open.filter((item) => item.slaHours >= 18);
+
+    return {
+      total: enrichedComplaints.length,
+      open: open.length,
+      resolved: resolved.length,
+      high: high.length,
+      slaRisk: slaRisk.length,
+    };
+  }, [enrichedComplaints]);
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     if (submitting) return;
 
     setSubmitting(true);
-    setSubmitMessage(null);
     setSubmitError(null);
+    setSubmitMessage(null);
+
+    const packedDescription = `[${severity.toUpperCase()}] ${description.trim()}`;
 
     try {
       const { error } = await supabase.from("complaints").insert([
         {
           category,
-          description,
+          description: packedDescription,
           status: "Open" satisfies ComplaintStatus,
         },
       ]);
 
       if (error) {
-        setSubmitError(
-          "Something went wrong while submitting your complaint. Please try again."
-        );
+        setSubmitError("Could not submit complaint. Please retry.");
       } else {
-        setSubmitMessage("Complaint submitted successfully.");
+        setSubmitMessage("Complaint submitted. Campus response workflow is active.");
         setDescription("");
-        setCategory("Electrical");
+        setSeverity("Medium");
       }
     } catch {
-      setSubmitError(
-        "Something went wrong while submitting your complaint. Please try again."
-      );
+      setSubmitError("Could not submit complaint. Please retry.");
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleResolve = async (id: number) => {
+  const handleResolve = async (id: number | string) => {
     if (resolvingId) return;
 
     setResolvingId(id);
@@ -123,330 +220,371 @@ export default function ComplaintsPage() {
 
       if (!error) {
         setComplaints((prev) =>
-          prev.map((c) =>
-            c.id === id
-              ? {
-                  ...c,
-                  status: "Resolved",
-                }
-              : c
-          )
+          prev.map((item) => (item.id === id ? { ...item, status: "Resolved" } : item))
         );
       }
-    } catch {
-      // We intentionally avoid noisy console errors for end-users.
     } finally {
       setResolvingId(null);
     }
   };
 
-  const renderRoleGate = () => {
-    if (!roleReady) {
-      return (
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold text-slate-200">
-              Preparing your complaints workspace
-            </p>
-            <p className="text-xs text-slate-500 mt-1">
-              Detecting your role to load the correct experience.
-            </p>
-          </div>
-          <div className="h-8 w-8 rounded-full border-2 border-slate-700 border-t-cyan-400 animate-spin" />
-        </div>
-      );
-    }
+  const handleResolveRisky = async () => {
+    if (batchResolving) return;
 
-    if (!role) {
-      return (
-        <div className="rounded-2xl border border-amber-500/50 bg-slate-900/80 p-6 flex gap-3">
-          <div className="mt-0.5">
-            <AlertCircle className="h-5 w-5 text-amber-300" />
-          </div>
-          <div className="space-y-1">
-            <p className="text-sm font-semibold text-amber-200">
-              No role detected in this browser
-            </p>
-            <p className="text-xs text-slate-400">
-              Set
-              <span className="mx-1 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-200">
-                {ROLE_STORAGE_KEY}
-              </span>
-              in localStorage to
-              <span className="mx-1 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300">
-                &quot;student&quot;
-              </span>
-              or
-              <span className="ml-1 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300">
-                &quot;admin&quot;
-              </span>
-              , then refresh this page.
-            </p>
-          </div>
-        </div>
-      );
-    }
+    const riskyOpenIds = visibleComplaints
+      .filter((item) => item.status === "Open" && item.slaHours >= 18)
+      .map((item) => item.id);
 
-    return null;
+    if (riskyOpenIds.length === 0) return;
+
+    setBatchResolving(true);
+
+    try {
+      const { error } = await supabase
+        .from("complaints")
+        .update({ status: "Resolved" satisfies ComplaintStatus })
+        .in("id", riskyOpenIds);
+
+      if (!error) {
+        setComplaints((prev) =>
+          prev.map((item) =>
+            riskyOpenIds.includes(item.id) ? { ...item, status: "Resolved" } : item
+          )
+        );
+      }
+    } finally {
+      setBatchResolving(false);
+    }
   };
 
-  const gate = renderRoleGate();
-
   return (
-    <div className="p-8 space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-white tracking-tight">
-            Smart Complaints
-          </h2>
-          <p className="text-slate-400 mt-1 text-sm">
-            A unified, Supabase-backed complaints system for CampusOS.
-          </p>
+    <div className="space-y-6 p-5 md:p-8">
+      <section className="glass-panel section-reveal rounded-3xl border border-slate-700/70 p-5 md:p-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="section-title text-2xl font-bold text-white md:text-3xl">Incident Resolution Hub</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Structured complaint intake, severity-aware triage, and admin action loop.
+            </p>
+          </div>
+          <div className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-300">
+            <Megaphone className="h-4 w-4 text-cyan-300" />
+            Role: <span className="font-semibold capitalize">{role ?? "pending"}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-slate-700/70 bg-slate-900 px-3 py-1.5 text-[11px] font-medium text-slate-300">
-          <Megaphone className="h-3.5 w-3.5 text-cyan-400" />
-          <span className="capitalize">{role ?? "role pending"}</span>
-        </div>
-      </div>
+      </section>
 
-      {gate}
+      {!roleReady && (
+        <div className="glass-panel rounded-2xl border border-slate-700/70 px-4 py-5 text-sm text-slate-300">
+          Preparing complaints workspace...
+        </div>
+      )}
+
+      {roleReady && !role && (
+        <div className="rounded-2xl border border-amber-500/50 bg-amber-500/10 p-5 text-sm text-amber-100">
+          No role detected. Set {ROLE_STORAGE_KEY} in localStorage to &quot;student&quot; or &quot;admin&quot; and refresh.
+        </div>
+      )}
 
       {roleReady && role === "student" && (
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] gap-6">
-          <div className="relative rounded-2xl border border-cyan-500/40 bg-slate-950/80 p-6 overflow-hidden">
-            <div className="pointer-events-none absolute -top-40 -right-32 h-64 w-64 rounded-full bg-cyan-500/15 blur-3xl" />
-            <div className="pointer-events-none absolute -bottom-40 -left-32 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+          <section className="glass-panel section-reveal rounded-2xl border border-cyan-500/35 p-5">
+            <h3 className="section-title text-xl font-bold text-white">Submit Complaint</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Severity-tagged complaints improve response prioritization for campus teams.
+            </p>
 
-            <div className="relative flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/15 border border-cyan-500/40">
-                  <AlertCircle className="h-5 w-5 text-cyan-400" />
+            <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-400">Category</label>
+                  <select
+                    value={category}
+                    onChange={(event) =>
+                      setCategory(event.target.value as (typeof CATEGORIES)[number])
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 focus:border-cyan-500/70 focus:outline-none"
+                    required
+                  >
+                    {CATEGORIES.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-100 tracking-wide">
-                    File a smart complaint
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Categorised tickets that route directly into CampusOS.
-                  </p>
+                  <label className="mb-1 block text-xs font-semibold text-slate-400">Severity</label>
+                  <select
+                    value={severity}
+                    onChange={(event) => setSeverity(event.target.value as Severity)}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 focus:border-cyan-500/70 focus:outline-none"
+                    required
+                  >
+                    {(["Low", "Medium", "High"] as Severity[]).map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
-            </div>
-
-            <form
-              onSubmit={handleSubmit}
-              className="relative space-y-4 text-sm text-slate-100"
-            >
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">
-                  Category
-                </label>
-                <select
-                  value={category}
-                  onChange={(e) =>
-                    setCategory(e.target.value as (typeof categories)[number])
-                  }
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-4 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
-                  required
-                >
-                  {categories.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">
-                  Description
-                </label>
+                <label className="mb-1 block text-xs font-semibold text-slate-400">Issue description</label>
                 <textarea
                   value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  rows={4}
+                  onChange={(event) => setDescription(event.target.value)}
                   required
-                  placeholder="Describe the issue with enough detail for the campus team to act."
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/40 resize-none"
+                  rows={5}
+                  placeholder="Describe what happened, where, and how urgent this is."
+                  className="w-full resize-none rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500/70 focus:outline-none"
                 />
               </div>
 
-              <div className="flex items-center justify-between gap-3 pt-2">
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-[0_0_30px_rgba(34,211,238,0.6)] transition-transform hover:scale-[1.02] hover:bg-cyan-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-80"
-                >
-                  {submitting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Plus className="h-4 w-4" />
-                  )}
-                  <span>
-                    {submitting ? "Submitting complaint..." : "Submit complaint"}
-                  </span>
-                </button>
-              </div>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 shadow-[0_0_28px_rgba(34,211,238,0.45)] transition-transform hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-80"
+              >
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                {submitting ? "Submitting..." : "Submit complaint"}
+              </button>
 
-              {(submitMessage || submitError) && (
+              {(submitError || submitMessage) && (
                 <div
-                  className={`mt-3 flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium ${
+                  className={`rounded-xl border px-3 py-2 text-xs ${
                     submitError
                       ? "border-rose-500/40 bg-rose-500/10 text-rose-100"
                       : "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
                   }`}
                 >
-                  {submitError ? (
-                    <AlertCircle className="h-3.5 w-3.5" />
-                  ) : (
-                    <CheckCircle className="h-3.5 w-3.5" />
-                  )}
-                  <span>{submitError ?? submitMessage}</span>
+                  {submitError ?? submitMessage}
                 </div>
               )}
             </form>
-          </div>
+          </section>
 
-          <div className="rounded-2xl border border-slate-700/70 bg-slate-900/80 p-6 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-100">
-              How complaints flow
-            </h3>
-            <p className="text-xs text-slate-400">
-              Each complaint is written into your Supabase Complaints table
-              with an initial
-              <span className="mx-1 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-rose-300">
-                status: &quot;Open&quot;
-              </span>
-              . Admins see a live grid of these tickets and can resolve them
-              with a single click.
-            </p>
-          </div>
+          <section className="glass-panel section-reveal rounded-2xl border border-slate-700/70 p-5">
+            <h3 className="section-title text-lg font-semibold text-slate-100">Campus response pulse</h3>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 p-3">
+                <p className="text-xs text-slate-500">Open incidents</p>
+                <p className="mt-1 text-2xl font-bold text-amber-100">{analytics.open}</p>
+              </div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 p-3">
+                <p className="text-xs text-slate-500">Resolved incidents</p>
+                <p className="mt-1 text-2xl font-bold text-emerald-100">{analytics.resolved}</p>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Recent campus incidents
+              </p>
+              <div className="mt-2 space-y-2">
+                {complaintsLoading ? (
+                  <div className="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
+                    Loading incident stream...
+                  </div>
+                ) : enrichedComplaints.length === 0 ? (
+                  <div className="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
+                    No incidents reported yet.
+                  </div>
+                ) : (
+                  enrichedComplaints.slice(0, 5).map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-slate-700/80 bg-slate-900/70 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-100">{item.category}</span>
+                        <span className="status-chip text-cyan-100">{item.severity}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-300">{item.cleanDescription}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </section>
         </div>
       )}
 
       {roleReady && role === "admin" && (
-        <div className="space-y-4">
-          {complaintsError && (
-            <div className="flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-100">
-              <AlertCircle className="h-3.5 w-3.5" />
-              <span>{complaintsError}</span>
-            </div>
-          )}
+        <div className="space-y-5">
+          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <article className="glass-panel rounded-2xl border border-slate-700/70 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Total</p>
+              <p className="mt-2 text-2xl font-bold text-white">{analytics.total}</p>
+            </article>
+            <article className="glass-panel rounded-2xl border border-slate-700/70 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Open</p>
+              <p className="mt-2 text-2xl font-bold text-amber-100">{analytics.open}</p>
+            </article>
+            <article className="glass-panel rounded-2xl border border-slate-700/70 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Resolved</p>
+              <p className="mt-2 text-2xl font-bold text-emerald-100">{analytics.resolved}</p>
+            </article>
+            <article className="glass-panel rounded-2xl border border-slate-700/70 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">High Severity</p>
+              <p className="mt-2 text-2xl font-bold text-rose-100">{analytics.high}</p>
+            </article>
+            <article className="glass-panel rounded-2xl border border-slate-700/70 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">SLA Risk</p>
+              <p className="mt-2 text-2xl font-bold text-orange-100">{analytics.slaRisk}</p>
+            </article>
+          </section>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-300">
-            <span className="text-slate-400">
-              {complaints.length} total complaints
-            </span>
-            <div className="flex flex-wrap gap-2">
-              {["All", "Open", "Resolved"].map((label) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() =>
-                    setStatusFilter(
-                      label === "All" ? "All" : (label as ComplaintStatus)
-                    )
-                  }
-                  className={`px-3 py-1.5 rounded-full border text-[11px] font-medium transition-colors ${
-                    statusFilter === label
-                      ? "border-cyan-500/80 bg-cyan-500/10 text-cyan-200"
-                      : "border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-500 hover:text-slate-200"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-            {complaintsLoading ? (
-              <div className="col-span-full flex items-center justify-center rounded-2xl border border-slate-700/60 bg-slate-900/80 px-6 py-10 text-xs text-slate-400">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin text-cyan-400" />
-                Loading complaints...
+          <section className="glass-panel rounded-2xl border border-slate-700/70 p-5">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="relative w-full max-w-sm">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search category or description"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 py-2 pl-9 pr-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-500/70 focus:outline-none"
+                />
               </div>
-            ) : complaints.length === 0 ? (
-              <div className="col-span-full rounded-2xl border border-slate-700/60 bg-slate-900/80 px-6 py-8 text-center text-xs text-slate-500">
-                No complaints have been filed yet.
-              </div>
-            ) : (
-              complaints
-                .filter((complaint) =>
-                  statusFilter === "All"
-                    ? true
-                    : complaint.status === statusFilter
-                )
-                .map((complaint) => {
-                const isOpen = complaint.status === "Open";
 
-                return (
-                  <div
-                    key={complaint.id}
-                    className="relative flex h-full flex-col gap-3 rounded-2xl border border-slate-700/70 bg-slate-950/80 p-5 shadow-[0_0_25px_rgba(15,23,42,0.7)] hover:border-cyan-500/40 transition-colors"
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-400">
+                  <Filter className="h-3.5 w-3.5" /> Filters
+                </div>
+
+                {(["All", "Open", "Resolved"] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setStatusFilter(option)}
+                    className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      statusFilter === option
+                        ? "border-cyan-500/60 bg-cyan-500/10 text-cyan-100"
+                        : "border-slate-700 bg-slate-900/70 text-slate-400"
+                    }`}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2 text-[11px] font-medium text-slate-300">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-900 border border-slate-700">
-                          {isOpen ? (
-                            <AlertCircle className="h-3.5 w-3.5 text-rose-400" />
-                          ) : (
-                            <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />
-                          )}
-                        </span>
-                        <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
-                          {complaint.category}
+                    {option}
+                  </button>
+                ))}
+
+                {(["All", "Low", "Medium", "High"] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setSeverityFilter(option)}
+                    className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      severityFilter === option
+                        ? "border-violet-500/60 bg-violet-500/10 text-violet-100"
+                        : "border-slate-700 bg-slate-900/70 text-slate-400"
+                    }`}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleResolveRisky}
+                disabled={batchResolving}
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/55 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {batchResolving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Shield className="h-3.5 w-3.5" />}
+                Resolve SLA-risk items
+              </button>
+              <span className="text-xs text-slate-500">Targets open incidents older than 18 hours.</span>
+            </div>
+
+            {complaintsError && (
+              <div className="mt-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+                {complaintsError}
+              </div>
+            )}
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {complaintsLoading ? (
+                <div className="col-span-full rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-6 text-center text-xs text-slate-400">
+                  <Loader2 className="mx-auto mb-2 h-4 w-4 animate-spin text-cyan-300" />
+                  Loading complaints...
+                </div>
+              ) : visibleComplaints.length === 0 ? (
+                <div className="col-span-full rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-6 text-center text-xs text-slate-400">
+                  No complaints match active filters.
+                </div>
+              ) : (
+                visibleComplaints.map((complaint) => {
+                  const isOpen = complaint.status === "Open";
+                  const severityTone: Record<Severity, string> = {
+                    Low: "text-emerald-100",
+                    Medium: "text-amber-100",
+                    High: "text-rose-100",
+                  };
+
+                  return (
+                    <article
+                      key={complaint.id}
+                      className="rounded-xl border border-slate-700/80 bg-slate-900/75 p-4"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-100">{complaint.category}</span>
+                        <span className={`status-chip ${severityTone[complaint.severity]}`}>
+                          <Siren className="h-3.5 w-3.5" />
+                          {complaint.severity}
                         </span>
                       </div>
 
-                      {isOpen ? (
-                        <button
-                          type="button"
-                          onClick={() => handleResolve(complaint.id)}
-                          disabled={resolvingId === complaint.id}
-                          className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-1 text-[11px] font-semibold text-slate-950 shadow-[0_0_30px_rgba(16,185,129,0.7)] transition-transform hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-80"
-                        >
-                          {resolvingId === complaint.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <CheckCircle className="h-3 w-3" />
-                          )}
-                          <span>Mark as resolved</span>
-                        </button>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/60 bg-emerald-500/15 px-3 py-1 text-[11px] font-semibold text-emerald-200">
-                          <CheckCircle className="h-3 w-3" />
-                          Resolved
+                      <p className="mt-2 text-sm leading-relaxed text-slate-200">
+                        {complaint.cleanDescription}
+                      </p>
+
+                      <div className="mt-3 flex items-center justify-between gap-2 text-xs text-slate-400">
+                        <span className="inline-flex items-center gap-1">
+                          <Clock3 className="h-3.5 w-3.5" />
+                          {complaint.slaHours}h open
                         </span>
-                      )}
-                    </div>
+                        <span>{formatTimestamp(complaint.created_at)}</span>
+                      </div>
 
-                    <p className="text-sm text-slate-100 leading-relaxed">
-                      {complaint.description}
-                    </p>
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <span
+                          className={`status-chip ${
+                            isOpen ? "text-amber-100" : "text-emerald-100"
+                          }`}
+                        >
+                          {isOpen ? <AlertCircle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                          {complaint.status}
+                        </span>
 
-                    <p className="mt-auto text-[11px] text-slate-500">
-                      {formatTimestamp(complaint.created_at)}
-                    </p>
-                  </div>
-                );
-              })
-            )}
-          </div>
+                        {isOpen ? (
+                          <button
+                            type="button"
+                            onClick={() => handleResolve(complaint.id)}
+                            disabled={resolvingId === complaint.id}
+                            className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-1 text-[11px] font-semibold text-slate-950 shadow-[0_0_22px_rgba(16,185,129,0.5)] disabled:cursor-not-allowed disabled:opacity-80"
+                          >
+                            {resolvingId === complaint.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Wrench className="h-3.5 w-3.5" />
+                            )}
+                            Resolve
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-emerald-200">Completed</span>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </section>
         </div>
       )}
     </div>
   );
-}
-
-function formatTimestamp(value?: string | null) {
-  if (!value) return "";
-
-  try {
-    return new Date(value).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  } catch {
-    return value;
-  }
 }

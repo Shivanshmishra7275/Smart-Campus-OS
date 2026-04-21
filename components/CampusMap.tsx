@@ -1,7 +1,15 @@
 "use client";
 
-import { useMemo } from "react";
-import { MapContainer, TileLayer, Marker, Circle, Popup, useMap } from "react-leaflet";
+import { Fragment, useMemo } from "react";
+import {
+  Circle,
+  MapContainer,
+  Marker,
+  Polyline,
+  Popup,
+  TileLayer,
+  useMap,
+} from "react-leaflet";
 import type { LatLngExpression } from "leaflet";
 
 export type CampusLocationWithCoords = {
@@ -23,6 +31,7 @@ type CampusMapProps = {
   userLocation: UserLocation | null;
   onLocateMe: () => void;
   locating: boolean;
+  routePath?: CampusLocationWithCoords[];
 };
 
 function RecenterOnChange({ center }: { center: LatLngExpression }) {
@@ -37,6 +46,7 @@ export default function CampusMap({
   userLocation,
   onLocateMe,
   locating,
+  routePath,
 }: CampusMapProps) {
   const center: LatLngExpression = useMemo(() => {
     if (userLocation) {
@@ -53,6 +63,9 @@ export default function CampusMap({
   const userPosition: LatLngExpression | null = userLocation
     ? [userLocation.lat, userLocation.lng]
     : null;
+
+  const routePoints: LatLngExpression[] =
+    routePath?.map((point) => [point.lat, point.lng]) ?? [];
 
   return (
     <div className="relative flex-1 min-h-72 m-4 rounded-2xl border border-slate-700 overflow-hidden">
@@ -72,14 +85,34 @@ export default function CampusMap({
         {allLocations?.map((loc) => {
           const position: LatLngExpression = [loc.lat, loc.lng];
           return (
-            <Marker key={loc.id} position={position}>
-              <Popup>{loc.name}</Popup>
-            </Marker>
+            <Fragment key={loc.id}>
+              {loc.id === selectedLocation.id && (
+                <Circle
+                  center={position}
+                  radius={36}
+                  pathOptions={{ color: "#22d3ee", fillColor: "#22d3ee", fillOpacity: 0.18 }}
+                />
+              )}
+              <Marker position={position}>
+                <Popup>{loc.name}</Popup>
+              </Marker>
+            </Fragment>
           );
         }) ?? (
           <Marker position={selectedPosition}>
             <Popup>{selectedLocation.name}</Popup>
           </Marker>
+        )}
+
+        {routePoints.length >= 2 && (
+          <Polyline
+            positions={routePoints}
+            pathOptions={{
+              color: "#22d3ee",
+              weight: 4,
+              opacity: 0.75,
+            }}
+          />
         )}
 
         {/* User location, if available */}

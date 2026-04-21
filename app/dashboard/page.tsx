@@ -1,658 +1,576 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  LayoutDashboard,
-  Users,
-  BookOpen,
-  AlertTriangle,
-  QrCode,
-  MessageSquareWarning,
-  Map,
   Activity,
-  Bus,
-  Utensils,
-  MapPin,
-  Zap,
-  ShieldCheck,
+  ArrowRight,
+  Bell,
+  CalendarClock,
+  CheckCircle2,
+  Gauge,
+  GraduationCap,
+  MapPinned,
+  MessageSquareWarning,
+  QrCode,
+  Sparkles,
+  Timer,
+  Wrench,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
-type MetricDirection = "up" | "down";
+type RangeKey = "today" | "week" | "month";
 
-type MetricCard = {
+type AttendanceRow = {
   id: string;
-  label: string;
-  value: string;
-  change: string;
-  direction: MetricDirection;
-  icon: React.ElementType;
-  accent: string;
-  description: string;
+  student_id?: string;
+  status: string;
+  timestamp: string | null;
 };
 
-type AlertLevel = "critical" | "warning" | "info";
+type ComplaintRow = {
+  id: number | string;
+  category?: string;
+  description?: string;
+  status: string;
+  created_at: string | null;
+};
 
-type AlertItem = {
+type AutomationRule = {
   id: string;
-  level: AlertLevel;
   title: string;
-  context: string;
-  location: string;
-  time: string;
+  description: string;
+  impact: string;
 };
 
-type BusStatus = "on-time" | "delayed" | "cancelled";
+const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "week", label: "7 Days" },
+  { key: "month", label: "30 Days" },
+];
 
-type BusCard = {
-  id: string;
-  label: string;
-  destination: string;
-  eta: string;
-  occupancy: number;
-  status: BusStatus;
-};
-
-type CampusZone = {
-  id: string;
-  label: string;
-  occupancy: number;
-  tone: string;
-};
-
-const METRICS: MetricCard[] = [
+const AUTOMATION_RULES: AutomationRule[] = [
   {
-    id: "students",
-    label: "Active students on campus",
-    value: "2,847",
-    change: "+12%",
-    direction: "up",
-    icon: Users,
-    accent: "from-cyan-500 to-sky-500",
-    description: "Turnstile + Wi‑Fi presence in the last hour.",
+    id: "attendance-alert",
+    title: "Attendance anomaly alert",
+    description: "Notify section mentors when present ratio drops below 68%.",
+    impact: "Medium",
   },
   {
-    id: "attendance",
-    label: "Today's attendance rate",
-    value: "87.4%",
-    change: "+3.2%",
-    direction: "up",
-    icon: BookOpen,
-    accent: "from-emerald-500 to-teal-500",
-    description: "Across all sections connected to Smart Attendance.",
+    id: "complaint-escalation",
+    title: "Complaint SLA escalation",
+    description: "Escalate unresolved maintenance tickets older than 18 hours.",
+    impact: "High",
   },
   {
-    id: "complaints",
-    label: "Open complaints",
-    value: "14",
-    change: "–5",
-    direction: "down",
+    id: "crowd-redistribution",
+    title: "Crowd redistribution hint",
+    description: "Suggest alternate dining zones during occupancy peaks.",
+    impact: "Medium",
+  },
+];
+
+const QUICK_MODULES = [
+  {
+    href: "/attendance",
+    title: "Attendance Ops",
+    summary: "Live check-ins and class visibility",
+    icon: QrCode,
+    tone: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  },
+  {
+    href: "/complaints",
+    title: "Incident Desk",
+    summary: "Track and resolve complaints",
     icon: MessageSquareWarning,
-    accent: "from-amber-400 to-orange-500",
-    description: "Tickets still waiting for an admin resolution.",
+    tone: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+  },
+  {
+    href: "/map",
+    title: "Campus Routing",
+    summary: "Navigation + occupancy visibility",
+    icon: MapPinned,
+    tone: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200",
+  },
+  {
+    href: "/services",
+    title: "Service Requests",
+    summary: "IT and facility tickets",
+    icon: Wrench,
+    tone: "border-violet-500/40 bg-violet-500/10 text-violet-200",
   },
 ];
 
-const ALERTS: AlertItem[] = [
+const FALLBACK_ATTENDANCE: AttendanceRow[] = [
+  { id: "f-a1", student_id: "Aarav", status: "Present", timestamp: new Date().toISOString() },
+  { id: "f-a2", student_id: "Siya", status: "Present", timestamp: new Date().toISOString() },
+  { id: "f-a3", student_id: "Ishaan", status: "Absent", timestamp: new Date().toISOString() },
+  { id: "f-a4", student_id: "Anaya", status: "Present", timestamp: new Date().toISOString() },
+];
+
+const FALLBACK_COMPLAINTS: ComplaintRow[] = [
   {
-    id: "1",
-    level: "critical",
-    title: "Multiple attendance failures in a row",
-    context: "Supabase writes are failing for one lab cluster.",
-    location: "Smart Attendance · CS Block",
-    time: "2 min ago",
+    id: "f-c1",
+    category: "Electrical",
+    description: "Library floor 2 lights flickering after 7 PM.",
+    status: "Open",
+    created_at: new Date().toISOString(),
   },
   {
-    id: "2",
-    level: "warning",
-    title: "Complaints queue above usual",
-    context: "Hostel facilities complaints are trending higher today.",
-    location: "Smart Complaints",
-    time: "8 min ago",
+    id: "f-c2",
+    category: "WiFi",
+    description: "Intermittent packet loss in CS block B.",
+    status: "Resolved",
+    created_at: new Date().toISOString(),
   },
   {
-    id: "3",
-    level: "info",
-    title: "Map sensors synced",
-    context: "Latest locations pulled from IoT devices.",
-    location: "Campus Map",
-    time: "18 min ago",
+    id: "f-c3",
+    category: "Hostel",
+    description: "Water pressure low in tower C during morning slots.",
+    status: "Open",
+    created_at: new Date().toISOString(),
   },
 ];
 
-const BUSES: BusCard[] = [
-  {
-    id: "b1",
-    label: "Route 1",
-    destination: "Hostels ↔ Main Gate",
-    eta: "4 min",
-    occupancy: 72,
-    status: "on-time",
-  },
-  {
-    id: "b2",
-    label: "Route 7",
-    destination: "Tech Park ↔ North Gate",
-    eta: "11 min",
-    occupancy: 83,
-    status: "delayed",
-  },
-  {
-    id: "b3",
-    label: "Route 4",
-    destination: "Medical Center ↔ West Gate",
-    eta: "—",
-    occupancy: 0,
-    status: "cancelled",
-  },
-];
+function getRangeStart(range: RangeKey): Date {
+  const now = new Date();
 
-const ZONES: CampusZone[] = [
-  {
-    id: "library",
-    label: "Library cluster",
-    occupancy: 76,
-    tone: "bg-violet-400",
-  },
-  {
-    id: "labs",
-    label: "Labs + CS block",
-    occupancy: 64,
-    tone: "bg-cyan-400",
-  },
-  {
-    id: "hostels",
-    label: "Hostel towers",
-    occupancy: 48,
-    tone: "bg-emerald-400",
-  },
-  {
-    id: "sports",
-    label: "Sports + grounds",
-    occupancy: 31,
-    tone: "bg-pink-400",
-  },
-];
+  if (range === "today") {
+    now.setHours(0, 0, 0, 0);
+    return now;
+  }
 
-function LiveDot() {
-  return (
-    <span className="relative flex h-2 w-2 flex-shrink-0">
-      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
-      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-    </span>
-  );
+  if (range === "week") {
+    now.setDate(now.getDate() - 7);
+    return now;
+  }
+
+  now.setDate(now.getDate() - 30);
+  return now;
 }
 
-function GlassCard({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={`relative overflow-hidden rounded-2xl border border-slate-800/70 bg-slate-950/60 shadow-[0_22px_60px_rgba(15,23,42,0.9)] backdrop-blur-2xl ${className ?? ""}`}
-    >
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/5/5 to-transparent opacity-[0.03]" />
-      <div className="relative z-10">{children}</div>
-    </div>
-  );
+function buildTrendSeries(attendance: AttendanceRow[], complaints: ComplaintRow[]) {
+  return Array.from({ length: 12 }, (_, index) => {
+    const attendanceItem = attendance[index];
+    const complaintItem = complaints[index];
+
+    const attendanceValue = attendanceItem
+      ? attendanceItem.status === "Present"
+        ? 75
+        : 46
+      : 38 + ((index * 11) % 22);
+
+    const complaintValue = complaintItem
+      ? complaintItem.status === "Open"
+        ? 68
+        : 40
+      : 32 + ((index * 9) % 26);
+
+    return {
+      attendance: attendanceValue,
+      complaints: complaintValue,
+    };
+  });
 }
 
-function MetricPill({ direction, change }: { direction: MetricDirection; change: string }) {
-  const positive = direction === "up";
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-        positive
-          ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
-          : "bg-rose-500/10 text-rose-300 border border-rose-500/30"
-      }`}
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      {change}
-    </span>
-  );
-}
+function formatTimestamp(value: string | null) {
+  if (!value) return "No timestamp";
 
-function AlertBadge({ level }: { level: AlertLevel }) {
-  const map: Record<AlertLevel, { label: string; tone: string }> = {
-    critical: {
-      label: "Critical",
-      tone: "bg-rose-500/10 text-rose-300 border-rose-500/40",
-    },
-    warning: {
-      label: "Warning",
-      tone: "bg-amber-500/10 text-amber-300 border-amber-500/40",
-    },
-    info: {
-      label: "Info",
-      tone: "bg-sky-500/10 text-sky-300 border-sky-500/40",
-    },
-  };
-
-  const { label, tone } = map[level];
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tone}`}
-    >
-      <AlertTriangle className="h-3 w-3" />
-      {label}
-    </span>
-  );
-}
-
-function StatusPill({ status }: { status: BusStatus }) {
-  const tone: Record<BusStatus, string> = {
-    "on-time": "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
-    delayed: "bg-amber-500/10 text-amber-300 border-amber-500/30",
-    cancelled: "bg-rose-500/10 text-rose-300 border-rose-500/30",
-  };
-
-  const label: Record<BusStatus, string> = {
-    "on-time": "On time",
-    delayed: "Delayed",
-    cancelled: "Cancelled",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tone[status]}`}
-    >
-      {label[status]}
-    </span>
-  );
-}
-
-function OccupancyBar({ value }: { value: number }) {
-  const pct = Math.max(0, Math.min(100, value));
-  const color =
-    pct >= 85
-      ? "from-rose-500 to-orange-500"
-      : pct >= 65
-      ? "from-amber-400 to-orange-500"
-      : "from-cyan-400 to-sky-500";
-
-  return (
-    <div className="mt-1 flex items-center gap-2">
-      <div className="h-1 w-full overflow-hidden rounded-full bg-slate-800">
-        <div
-          className={`h-full rounded-full bg-gradient-to-r ${color}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="w-10 text-right text-[10px] tabular-nums text-slate-400">
-        {pct}%
-      </span>
-    </div>
-  );
-}
-
-function CampusMiniMap() {
-  return (
-    <div className="relative min-h-[220px] overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
-      <div
-        className="absolute inset-0 opacity-40"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(56,189,248,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(56,189,248,0.05) 1px, transparent 1px)",
-          backgroundSize: "28px 28px",
-        }}
-      />
-
-      <div className="relative z-10 flex h-full flex-col justify-between p-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-500/15 border border-cyan-500/40">
-              <Map className="h-3.5 w-3.5 text-cyan-400" />
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold text-slate-200">
-                Campus heatmap
-              </p>
-              <p className="text-[10px] text-slate-500">
-                Live occupancy across key zones.
-              </p>
-            </div>
-          </div>
-          <Zap className="h-3.5 w-3.5 text-amber-400" />
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          {ZONES.map((zone) => (
-            <div
-              key={zone.id}
-              className="rounded-xl border border-slate-800 bg-slate-900/80 p-2.5"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`inline-block h-1.5 w-1.5 rounded-full ${zone.tone}`}
-                  />
-                  <p className="truncate text-[11px] font-medium text-slate-100">
-                    {zone.label}
-                  </p>
-                </div>
-                <span className="text-[10px] text-slate-500">{zone.occupancy}%</span>
-              </div>
-              <OccupancyBar value={zone.occupancy} />
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-3 flex items-center justify-between text-[9px] text-slate-600">
-          <span className="flex items-center gap-1">
-            <MapPin className="h-3 w-3" />
-            Smart Campus map is simulated.
-          </span>
-          <span className="font-mono text-slate-700">Lucknow · IST</span>
-        </div>
-      </div>
-    </div>
-  );
+  try {
+    return new Date(value).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  } catch {
+    return value;
+  }
 }
 
 export default function DashboardPage() {
-  const [clock, setClock] = useState<string>("");
+  const [range, setRange] = useState<RangeKey>("today");
+  const [clock, setClock] = useState("");
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [attendanceRows, setAttendanceRows] = useState<AttendanceRow[]>([]);
+  const [complaintRows, setComplaintRows] = useState<ComplaintRow[]>([]);
+  const [automationState, setAutomationState] = useState<Record<string, boolean>>({
+    "attendance-alert": true,
+    "complaint-escalation": true,
+    "crowd-redistribution": false,
+  });
 
   useEffect(() => {
-    const update = () => {
-      const now = new Date();
+    const updateClock = () => {
       setClock(
-        now.toLocaleTimeString(undefined, {
+        new Date().toLocaleTimeString(undefined, {
           hour: "2-digit",
           minute: "2-digit",
         })
       );
     };
 
-    update();
-    const id = setInterval(update, 30_000);
+    updateClock();
+    const id = setInterval(updateClock, 30_000);
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setDataError(null);
+
+      const since = getRangeStart(range).toISOString();
+
+      const [attendanceResult, complaintResult] = await Promise.all([
+        supabase
+          .from("attendance")
+          .select("id, student_id, status, timestamp")
+          .gte("timestamp", since)
+          .order("timestamp", { ascending: false })
+          .limit(400),
+        supabase
+          .from("complaints")
+          .select("id, category, description, status, created_at")
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+          .limit(200),
+      ]);
+
+      if (cancelled) return;
+
+      if (attendanceResult.error || complaintResult.error) {
+        setDataError(
+          "Live data is partially unavailable. Showing resilient fallback insights."
+        );
+        setAttendanceRows(FALLBACK_ATTENDANCE);
+        setComplaintRows(FALLBACK_COMPLAINTS);
+      } else {
+        setAttendanceRows((attendanceResult.data as AttendanceRow[]) ?? []);
+        setComplaintRows((complaintResult.data as ComplaintRow[]) ?? []);
+      }
+
+      setLoading(false);
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [range]);
+
+  const derived = useMemo(() => {
+    const attendanceTotal = attendanceRows.length;
+    const presentCount = attendanceRows.filter((row) => row.status === "Present").length;
+    const openComplaints = complaintRows.filter((row) => row.status === "Open").length;
+    const resolvedComplaints = complaintRows.filter((row) => row.status === "Resolved").length;
+    const uniqueStudents = new Set(
+      attendanceRows
+        .map((row) => row.student_id)
+        .filter((studentId): studentId is string => Boolean(studentId && studentId.trim()))
+    ).size;
+
+    const attendanceRate = attendanceTotal > 0 ? (presentCount / attendanceTotal) * 100 : 0;
+    const resolutionRate =
+      complaintRows.length > 0
+        ? (resolvedComplaints / complaintRows.length) * 100
+        : 0;
+
+    return {
+      attendanceTotal,
+      presentCount,
+      openComplaints,
+      resolvedComplaints,
+      uniqueStudents,
+      attendanceRate,
+      resolutionRate,
+    };
+  }, [attendanceRows, complaintRows]);
+
+  const trendSeries = useMemo(
+    () => buildTrendSeries(attendanceRows, complaintRows),
+    [attendanceRows, complaintRows]
+  );
+
+  const recentComplaints = useMemo(() => complaintRows.slice(0, 4), [complaintRows]);
+
   return (
-    <div className="relative space-y-6 p-6 md:p-8">
-      {/* Ambient grid */}
-      <div className="pointer-events-none absolute inset-0 -z-10 opacity-40">
-        <div
-          className="h-full w-full"
-          style={{
-            backgroundImage:
-              "radial-gradient(circle at 0% 0%, rgba(56,189,248,0.12), transparent 55%), radial-gradient(circle at 100% 100%, rgba(129,140,248,0.12), transparent 55%)",
-          }}
-        />
-      </div>
-
-      {/* Header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-400/80">
-            <LayoutDashboard className="h-3 w-3" />
-            <span>CampusOS Command Center</span>
+    <div className="relative space-y-6 p-5 md:p-8">
+      <section className="glass-panel section-reveal rounded-3xl border border-slate-700/70 p-5 md:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="mb-1 inline-flex items-center gap-2 rounded-full border border-cyan-500/40 bg-cyan-500/10 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-cyan-200">
+              <Sparkles className="h-3 w-3" />
+              Campus Intelligence Layer
+            </div>
+            <h2 className="section-title text-2xl font-bold text-white md:text-3xl">
+              Real-time Command Center
+            </h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Cross-module insight feed from attendance and incident systems.
+            </p>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white md:text-3xl">
-            Live overview
-          </h1>
-          <p className="mt-1 text-xs text-slate-400 md:text-sm">
-            Today&apos;s snapshot of attendance, complaints, buses, and campus
-            load.
-          </p>
-        </div>
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-2 text-xs text-slate-300">
-          <LiveDot />
-          <span className="font-medium">Smart Campus online</span>
-          <span className="hidden text-slate-500 sm:inline">•</span>
-          <span className="hidden font-mono text-slate-400 sm:inline">
-            {clock || "--:--"} · IST
-          </span>
-        </div>
-      </div>
 
-      {/* Top row: metrics + quick links */}
-      <div className="grid gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1.1fr)]">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {METRICS.map((metric) => {
-            const Icon = metric.icon;
-            return (
-              <GlassCard key={metric.id} className="p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                      {metric.label}
-                    </p>
-                    <div className="mt-2 flex items-baseline gap-1">
-                      <span className="text-2xl font-semibold text-slate-50">
-                        {metric.value}
-                      </span>
-                    </div>
-                  </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {RANGE_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setRange(option.key)}
+                className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  range === option.key
+                    ? "border-cyan-400/60 bg-cyan-500/10 text-cyan-100"
+                    : "border-slate-700 bg-slate-900/70 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+
+            <div className="ml-1 inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-300">
+              <Timer className="h-3.5 w-3.5 text-emerald-300" />
+              <span className="font-mono">{clock || "--:--"} IST</span>
+            </div>
+          </div>
+        </div>
+
+        {dataError && (
+          <div className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            {dataError}
+          </div>
+        )}
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <article className="glass-panel section-reveal stagger-1 rounded-2xl border border-slate-700/70 p-4">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Campus footprint</p>
+          <p className="mt-2 text-3xl font-bold text-white">{derived.uniqueStudents || 0}</p>
+          <p className="mt-1 text-xs text-slate-400">Unique active students in selected range</p>
+        </article>
+
+        <article className="glass-panel section-reveal stagger-2 rounded-2xl border border-slate-700/70 p-4">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Attendance health</p>
+          <p className="mt-2 text-3xl font-bold text-emerald-200">{derived.attendanceRate.toFixed(1)}%</p>
+          <p className="mt-1 text-xs text-slate-400">
+            {derived.presentCount} present out of {derived.attendanceTotal} events
+          </p>
+        </article>
+
+        <article className="glass-panel section-reveal stagger-3 rounded-2xl border border-slate-700/70 p-4">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Open incidents</p>
+          <p className="mt-2 text-3xl font-bold text-amber-200">{derived.openComplaints}</p>
+          <p className="mt-1 text-xs text-slate-400">
+            Active complaint threads requiring action
+          </p>
+        </article>
+
+        <article className="glass-panel section-reveal stagger-4 rounded-2xl border border-slate-700/70 p-4">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Resolution score</p>
+          <p className="mt-2 text-3xl font-bold text-cyan-200">{derived.resolutionRate.toFixed(1)}%</p>
+          <p className="mt-1 text-xs text-slate-400">
+            {derived.resolvedComplaints} complaints resolved in range
+          </p>
+        </article>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+        <article className="glass-panel section-reveal rounded-2xl border border-slate-700/70 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">Operational trend pulse</p>
+              <p className="text-xs text-slate-400">Attendance vs incident intensity (synthetic visual)</p>
+            </div>
+            <Activity className="h-4 w-4 text-cyan-300" />
+          </div>
+
+          <div className="grid grid-cols-12 items-end gap-2">
+            {trendSeries.map((item, index) => (
+              <div key={index} className="space-y-1">
+                <div className="h-24 rounded-md bg-slate-900/70 p-1">
                   <div
-                    className={`flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br ${metric.accent}`}
-                  >
-                    <Icon className="h-4 w-4 text-white" />
-                  </div>
-                </div>
-                <div className="mt-3 flex items-center justify-between">
-                  <p className="max-w-[11rem] text-[10px] text-slate-500">
-                    {metric.description}
-                  </p>
-                  <MetricPill
-                    direction={metric.direction}
-                    change={metric.change}
+                    className="w-full rounded bg-gradient-to-t from-cyan-500/90 to-cyan-300/80"
+                    style={{ height: `${item.attendance}%` }}
                   />
                 </div>
-              </GlassCard>
-            );
-          })}
-        </div>
-
-        <GlassCard className="flex flex-col justify-between p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-cyan-500/15 border border-cyan-500/40">
-                <ShieldCheck className="h-4 w-4 text-cyan-400" />
-              </div>
-              <div>
-                <p className="text-[11px] font-semibold text-slate-100">
-                  Quick modules
-                </p>
-                <p className="text-[10px] text-slate-500">
-                  Jump into the key CampusOS surfaces.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="mt-4 grid grid-cols-3 gap-2 text-[11px]">
-            <Link
-              href="/attendance"
-              className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3 transition-colors hover:border-emerald-400/60 hover:bg-emerald-500/5"
-            >
-              <div className="flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/15 border border-emerald-500/40">
-                  <QrCode className="h-3.5 w-3.5 text-emerald-400" />
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-100">Attendance</p>
-                  <p className="text-[10px] text-slate-500">Simulated QR</p>
-                </div>
-              </div>
-            </Link>
-            <Link
-              href="/complaints"
-              className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3 transition-colors hover:border-amber-400/60 hover:bg-amber-500/5"
-            >
-              <div className="flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/15 border border-amber-500/40">
-                  <MessageSquareWarning className="h-3.5 w-3.5 text-amber-300" />
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-100">Complaints</p>
-                  <p className="text-[10px] text-slate-500">Supabase tickets</p>
-                </div>
-              </div>
-            </Link>
-            <Link
-              href="/map"
-              className="flex flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3 transition-colors hover:border-sky-400/60 hover:bg-sky-500/5"
-            >
-              <div className="flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/15 border border-sky-500/40">
-                  <Map className="h-3.5 w-3.5 text-sky-300" />
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-100">Map</p>
-                  <p className="text-[10px] text-slate-500">Indoor routes</p>
-                </div>
-              </div>
-            </Link>
-          </div>
-        </GlassCard>
-      </div>
-
-      {/* Middle row: map + alerts */}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)]">
-        <GlassCard className="p-4">
-          <CampusMiniMap />
-        </GlassCard>
-
-        <GlassCard className="flex flex-col p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-500/15 border border-rose-500/40">
-                <AlertTriangle className="h-3.5 w-3.5 text-rose-300" />
-              </div>
-              <div>
-                <p className="text-[11px] font-semibold text-slate-100">
-                  Live incidents
-                </p>
-                <p className="text-[10px] text-slate-500">
-                  Derived from activity across CampusOS modules.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1 text-[10px] text-slate-500">
-              <Activity className="h-3 w-3 text-emerald-400" />
-              Auto‑refreshed
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {ALERTS.map((alert) => (
-              <div
-                key={alert.id}
-                className="rounded-xl border border-slate-800 bg-slate-900/80 p-3"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <AlertBadge level={alert.level} />
-                    <p className="text-[11px] font-medium text-slate-100">
-                      {alert.title}
-                    </p>
-                    <p className="text-[10px] text-slate-500">
-                      {alert.context}
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1 text-[10px] text-slate-600">
-                    <span>{alert.time}</span>
-                    <span className="inline-flex items-center gap-1 text-slate-500">
-                      <MapPin className="h-3 w-3" />
-                      {alert.location}
-                    </span>
-                  </div>
+                <div className="h-16 rounded-md bg-slate-900/70 p-1">
+                  <div
+                    className="w-full rounded bg-gradient-to-t from-amber-500/90 to-orange-300/80"
+                    style={{ height: `${item.complaints}%` }}
+                  />
                 </div>
               </div>
             ))}
           </div>
-        </GlassCard>
-      </div>
 
-      {/* Bottom row: transport + dining snapshot */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <GlassCard className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/15 border border-amber-500/40">
-                <Bus className="h-3.5 w-3.5 text-amber-300" />
-              </div>
-              <div>
-                <p className="text-[11px] font-semibold text-slate-100">
-                  Campus buses
-                </p>
-                <p className="text-[10px] text-slate-500">
-                  Synthetic data to show how live routes would look.
-                </p>
-              </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+              Attendance bars show stronger consistency this cycle.
+            </div>
+            <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+              Incident bars highlight complaint pressure windows.
             </div>
           </div>
+        </article>
+
+        <article className="glass-panel section-reveal rounded-2xl border border-slate-700/70 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">Recent incident stream</p>
+              <p className="text-xs text-slate-400">Latest complaints from the selected range</p>
+            </div>
+            <Bell className="h-4 w-4 text-amber-300" />
+          </div>
+
           <div className="space-y-2">
-            {BUSES.map((bus) => (
-              <div
-                key={bus.id}
-                className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3"
-              >
-                <span className="inline-flex h-8 w-12 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-[10px] font-semibold text-amber-200">
-                  {bus.label}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[11px] font-medium text-slate-100">
-                    {bus.destination}
-                  </p>
-                  <OccupancyBar value={bus.occupancy} />
-                </div>
-                <div className="flex flex-col items-end gap-1 text-[10px] text-slate-400">
-                  <span className="font-semibold text-slate-100">
-                    {bus.eta}
-                  </span>
-                  <StatusPill status={bus.status} />
-                </div>
+            {loading ? (
+              <div className="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-4 text-xs text-slate-400">
+                Loading live feed...
               </div>
-            ))}
-          </div>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-fuchsia-500/15 border border-fuchsia-500/40">
-                <Utensils className="h-3.5 w-3.5 text-fuchsia-300" />
+            ) : recentComplaints.length === 0 ? (
+              <div className="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-4 text-xs text-slate-400">
+                No complaints detected for this range.
               </div>
-              <div>
-                <p className="text-[11px] font-semibold text-slate-100">
-                  Dining snapshot
-                </p>
-                <p className="text-[10px] text-slate-500">
-                  Lightweight view of what&apos;s popular right now.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="grid gap-2 text-[11px] sm:grid-cols-2">
-            {["Dal makhani + roti", "Veg biryani", "Paneer bowl", "Masala dosa"].map(
-              (item, index) => (
-                <div
-                  key={item}
-                  className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3"
-                >
-                  <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-fuchsia-500/15">
-                    <Utensils className="h-3.5 w-3.5 text-fuchsia-300" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium text-slate-100">
-                      {item}
-                    </p>
-                    <p className="mt-0.5 text-[10px] text-slate-500">
-                      Approx. {380 + index * 40} kcal • rating {4.5 + index * 0.1}
+            ) : (
+              recentComplaints.map((complaint) => {
+                const isOpen = complaint.status === "Open";
+                return (
+                  <div
+                    key={complaint.id}
+                    className="rounded-xl border border-slate-700/80 bg-slate-900/75 px-3 py-3"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span
+                        className={`status-chip ${
+                          isOpen ? "text-amber-100" : "text-emerald-100"
+                        }`}
+                      >
+                        {isOpen ? <MessageSquareWarning className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                        {complaint.status}
+                      </span>
+                      <span className="text-[10px] text-slate-500">{formatTimestamp(complaint.created_at)}</span>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-200">
+                      {complaint.category ?? "General"}: {complaint.description ?? "No description"}
                     </p>
                   </div>
-                </div>
-              )
+                );
+              })
             )}
           </div>
-        </GlassCard>
-      </div>
+        </article>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+        <article className="glass-panel section-reveal rounded-2xl border border-slate-700/70 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">Multi-purpose modules</p>
+              <p className="text-xs text-slate-400">Jump directly into focused work surfaces</p>
+            </div>
+            <ArrowRight className="h-4 w-4 text-cyan-300" />
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            {QUICK_MODULES.map((module) => {
+              const Icon = module.icon;
+              return (
+                <Link
+                  key={module.href}
+                  href={module.href}
+                  className="rounded-xl border border-slate-700/80 bg-slate-900/75 p-3 transition-colors hover:border-cyan-400/45"
+                >
+                  <div className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${module.tone}`}>
+                    <Icon className="h-3.5 w-3.5" />
+                    {module.title}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-300">{module.summary}</p>
+                </Link>
+              );
+            })}
+          </div>
+        </article>
+
+        <article className="glass-panel section-reveal rounded-2xl border border-slate-700/70 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">Automation queue</p>
+              <p className="text-xs text-slate-400">Toggle operational policies for this environment</p>
+            </div>
+            <Gauge className="h-4 w-4 text-emerald-300" />
+          </div>
+
+          <div className="space-y-2.5">
+            {AUTOMATION_RULES.map((rule) => {
+              const active = automationState[rule.id];
+              return (
+                <button
+                  key={rule.id}
+                  type="button"
+                  onClick={() =>
+                    setAutomationState((prev) => ({
+                      ...prev,
+                      [rule.id]: !prev[rule.id],
+                    }))
+                  }
+                  className="w-full rounded-xl border border-slate-700/80 bg-slate-900/75 px-3 py-3 text-left transition-colors hover:border-cyan-400/50"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-100">{rule.title}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">{rule.description}</p>
+                    </div>
+                    <span
+                      className={`status-chip ${
+                        active ? "text-emerald-100" : "text-slate-400"
+                      }`}
+                    >
+                      {active ? "Enabled" : "Disabled"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-[10px] text-slate-500">Impact level: {rule.impact}</p>
+                </button>
+              );
+            })}
+          </div>
+        </article>
+      </section>
+
+      <section className="glass-panel section-reveal rounded-2xl border border-slate-700/70 p-5">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 p-3">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Class health</p>
+            <p className="mt-2 text-lg font-semibold text-slate-100">92.4%</p>
+            <p className="text-xs text-slate-400">Sections with stable attendance trend</p>
+          </div>
+          <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 p-3">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Service velocity</p>
+            <p className="mt-2 text-lg font-semibold text-slate-100">14.2 hrs</p>
+            <p className="text-xs text-slate-400">Median complaint turnaround time</p>
+          </div>
+          <div className="rounded-xl border border-slate-700/80 bg-slate-900/70 p-3">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Experience score</p>
+            <p className="mt-2 text-lg font-semibold text-slate-100">4.7 / 5</p>
+            <p className="text-xs text-slate-400">Based on student pulse check-ins</p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">
+            <GraduationCap className="h-3.5 w-3.5 text-cyan-300" />
+            Academics sync: healthy
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">
+            <CalendarClock className="h-3.5 w-3.5 text-emerald-300" />
+            Scheduler latency: normal
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1">
+            <Activity className="h-3.5 w-3.5 text-amber-300" />
+            IoT ingestion: 98.8% uptime
+          </span>
+        </div>
+      </section>
     </div>
   );
 }
