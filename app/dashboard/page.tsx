@@ -18,23 +18,19 @@ import {
   Wrench,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import {
+  readAttendanceLedger,
+  readComplaintLedger,
+  type AttendanceLedgerRecord,
+  type ComplaintLedgerRecord,
+  writeAttendanceLedger,
+  writeComplaintLedger,
+} from "@/lib/localCampusData";
 
 type RangeKey = "today" | "week" | "month";
 
-type AttendanceRow = {
-  id: string;
-  student_id?: string;
-  status: string;
-  timestamp: string | null;
-};
-
-type ComplaintRow = {
-  id: number | string;
-  category?: string;
-  description?: string;
-  status: string;
-  created_at: string | null;
-};
+type AttendanceRow = AttendanceLedgerRecord;
+type ComplaintRow = ComplaintLedgerRecord;
 
 type AutomationRule = {
   id: string;
@@ -101,37 +97,6 @@ const QUICK_MODULES = [
   },
 ];
 
-const FALLBACK_ATTENDANCE: AttendanceRow[] = [
-  { id: "f-a1", student_id: "Aarav", status: "Present", timestamp: new Date().toISOString() },
-  { id: "f-a2", student_id: "Siya", status: "Present", timestamp: new Date().toISOString() },
-  { id: "f-a3", student_id: "Ishaan", status: "Absent", timestamp: new Date().toISOString() },
-  { id: "f-a4", student_id: "Anaya", status: "Present", timestamp: new Date().toISOString() },
-];
-
-const FALLBACK_COMPLAINTS: ComplaintRow[] = [
-  {
-    id: "f-c1",
-    category: "Electrical",
-    description: "Library floor 2 lights flickering after 7 PM.",
-    status: "Open",
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "f-c2",
-    category: "WiFi",
-    description: "Intermittent packet loss in CS block B.",
-    status: "Resolved",
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: "f-c3",
-    category: "Hostel",
-    description: "Water pressure low in tower C during morning slots.",
-    status: "Open",
-    created_at: new Date().toISOString(),
-  },
-];
-
 function getRangeStart(range: RangeKey): Date {
   const now = new Date();
 
@@ -189,7 +154,7 @@ function formatTimestamp(value: string | null) {
 export default function DashboardPage() {
   const [range, setRange] = useState<RangeKey>("today");
   const [clock, setClock] = useState("");
-  const [dataError, setDataError] = useState<string | null>(null);
+  const [dataSource, setDataSource] = useState<"live" | "demo">("live");
   const [loading, setLoading] = useState(true);
   const [attendanceRows, setAttendanceRows] = useState<AttendanceRow[]>([]);
   const [complaintRows, setComplaintRows] = useState<ComplaintRow[]>([]);
@@ -219,7 +184,7 @@ export default function DashboardPage() {
 
     const load = async () => {
       setLoading(true);
-      setDataError(null);
+      setDataSource("live");
 
       const since = getRangeStart(range).toISOString();
 
@@ -240,16 +205,24 @@ export default function DashboardPage() {
 
       if (cancelled) return;
 
-      if (attendanceResult.error || complaintResult.error) {
-        setDataError(
-          "Live data is partially unavailable. Showing resilient fallback insights."
-        );
-        setAttendanceRows(FALLBACK_ATTENDANCE);
-        setComplaintRows(FALLBACK_COMPLAINTS);
-      } else {
-        setAttendanceRows((attendanceResult.data as AttendanceRow[]) ?? []);
-        setComplaintRows((complaintResult.data as ComplaintRow[]) ?? []);
+      const nextAttendanceRows = attendanceResult.error
+        ? readAttendanceLedger()
+        : ((attendanceResult.data as AttendanceRow[]) ?? []);
+      const nextComplaintRows = complaintResult.error
+        ? readComplaintLedger()
+        : ((complaintResult.data as ComplaintRow[]) ?? []);
+
+      if (!attendanceResult.error && nextAttendanceRows.length > 0) {
+        writeAttendanceLedger(nextAttendanceRows);
       }
+
+      if (!complaintResult.error && nextComplaintRows.length > 0) {
+        writeComplaintLedger(nextComplaintRows);
+      }
+
+      setAttendanceRows(nextAttendanceRows);
+      setComplaintRows(nextComplaintRows);
+      setDataSource(attendanceResult.error || complaintResult.error ? "demo" : "live");
 
       setLoading(false);
     };
@@ -336,11 +309,16 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {dataError && (
-          <div className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-            {dataError}
-          </div>
-        )}
+        <div
+          className={`mt-4 inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
+            dataSource === "demo"
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+          }`}
+        >
+          <span className={`h-2 w-2 rounded-full ${dataSource === "demo" ? "bg-amber-300" : "bg-emerald-300"}`} />
+          {dataSource === "demo" ? "Local demo data active" : "Live data connected"}
+        </div>
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

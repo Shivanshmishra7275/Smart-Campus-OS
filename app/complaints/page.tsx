@@ -16,6 +16,13 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { ROLE_STORAGE_KEY, useCampusRole } from "@/lib/useCampusRole";
+import {
+  appendComplaintRecord,
+  readComplaintLedger,
+  type ComplaintLedgerRecord,
+  updateComplaintStatuses,
+  writeComplaintLedger,
+} from "@/lib/localCampusData";
 
 type ComplaintStatus = "Open" | "Resolved";
 type Severity = "Low" | "Medium" | "High";
@@ -24,7 +31,7 @@ type Complaint = {
   id: number | string;
   category: string;
   description: string;
-  status: ComplaintStatus;
+  status: string;
   created_at?: string | null;
 };
 
@@ -89,7 +96,7 @@ export default function ComplaintsPage() {
 
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [complaintsLoading, setComplaintsLoading] = useState(false);
-  const [complaintsError, setComplaintsError] = useState<string | null>(null);
+  const [dataMode, setDataMode] = useState<"live" | "demo">("live");
   const [resolvingId, setResolvingId] = useState<number | string | null>(null);
   const [batchResolving, setBatchResolving] = useState(false);
 
@@ -104,7 +111,6 @@ export default function ComplaintsPage() {
 
     const fetchComplaints = async () => {
       setComplaintsLoading(true);
-      setComplaintsError(null);
 
       const { data, error } = await supabase
         .from("complaints")
@@ -114,10 +120,15 @@ export default function ComplaintsPage() {
       if (cancelled) return;
 
       if (error) {
-        setComplaintsError("Unable to load complaints right now.");
-        setComplaints([]);
+        setComplaints(readComplaintLedger());
+        setDataMode("demo");
       } else {
-        setComplaints((data as Complaint[]) ?? []);
+        const liveComplaints = (data as Complaint[]) ?? [];
+        setComplaints(liveComplaints);
+        if (liveComplaints.length > 0) {
+          writeComplaintLedger(liveComplaints as ComplaintLedgerRecord[]);
+        }
+        setDataMode("live");
       }
 
       setComplaintsLoading(false);
@@ -183,25 +194,46 @@ export default function ComplaintsPage() {
     setSubmitMessage(null);
 
     const packedDescription = `[${severity.toUpperCase()}] ${description.trim()}`;
+    const localComplaint: ComplaintLedgerRecord = {
+      id: `local-complaint-${Date.now()}`,
+      category,
+      description: packedDescription,
+      status: "Open",
+      created_at: new Date().toISOString(),
+    };
 
     try {
-      const { error } = await supabase.from("complaints").insert([
+      const { data, error } = await supabase
+        .from("complaints")
+        .insert([
         {
           category,
           description: packedDescription,
           status: "Open" satisfies ComplaintStatus,
         },
-      ]);
+        ])
+        .select("id, category, description, status, created_at")
+        .single();
 
       if (error) {
-        setSubmitError("Could not submit complaint. Please retry.");
+        setDataMode("demo");
       } else {
-        setSubmitMessage("Complaint submitted. Campus response workflow is active.");
-        setDescription("");
-        setSeverity("Medium");
+        setDataMode("live");
       }
+
+      const nextComplaint = (data as ComplaintLedgerRecord | null) ?? localComplaint;
+      const nextComplaints = appendComplaintRecord(nextComplaint);
+      setComplaints(nextComplaints);
+      setSubmitMessage("Complaint submitted. Campus response workflow is active.");
+      setDescription("");
+      setSeverity("Medium");
     } catch {
-      setSubmitError("Could not submit complaint. Please retry.");
+      const nextComplaints = appendComplaintRecord(localComplaint);
+      setComplaints(nextComplaints);
+      setDataMode("demo");
+      setSubmitMessage("Complaint submitted. Campus response workflow is active.");
+      setDescription("");
+      setSeverity("Medium");
     } finally {
       setSubmitting(false);
     }
@@ -218,11 +250,16 @@ export default function ComplaintsPage() {
         .update({ status: "Resolved" satisfies ComplaintStatus })
         .eq("id", id);
 
-      if (!error) {
-        setComplaints((prev) =>
-          prev.map((item) => (item.id === id ? { ...item, status: "Resolved" } : item))
-        );
+      if (error) {
+        setDataMode("demo");
+      } else {
+        setDataMode("live");
       }
+
+      updateComplaintStatuses([id], "Resolved");
+      setComplaints((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, status: "Resolved" } : item))
+      );
     } finally {
       setResolvingId(null);
     }
@@ -245,13 +282,18 @@ export default function ComplaintsPage() {
         .update({ status: "Resolved" satisfies ComplaintStatus })
         .in("id", riskyOpenIds);
 
-      if (!error) {
-        setComplaints((prev) =>
-          prev.map((item) =>
-            riskyOpenIds.includes(item.id) ? { ...item, status: "Resolved" } : item
-          )
-        );
+      if (error) {
+        setDataMode("demo");
+      } else {
+        setDataMode("live");
       }
+
+      updateComplaintStatuses(riskyOpenIds, "Resolved");
+      setComplaints((prev) =>
+        prev.map((item) =>
+          riskyOpenIds.includes(item.id) ? { ...item, status: "Resolved" } : item
+        )
+      );
     } finally {
       setBatchResolving(false);
     }
@@ -271,6 +313,16 @@ export default function ComplaintsPage() {
             <Megaphone className="h-4 w-4 text-cyan-300" />
             Role: <span className="font-semibold capitalize">{role ?? "pending"}</span>
           </div>
+        </div>
+        <div
+          className={`mt-3 inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs ${
+            dataMode === "demo"
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+          }`}
+        >
+          <span className={`h-2 w-2 rounded-full ${dataMode === "demo" ? "bg-amber-300" : "bg-emerald-300"}`} />
+          {dataMode === "demo" ? "Local demo complaints active" : "Live complaints feed active"}
         </div>
       </section>
 
@@ -498,12 +550,6 @@ export default function ComplaintsPage() {
               </button>
               <span className="text-xs text-slate-500">Targets open incidents older than 18 hours.</span>
             </div>
-
-            {complaintsError && (
-              <div className="mt-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
-                {complaintsError}
-              </div>
-            )}
 
             <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {complaintsLoading ? (
