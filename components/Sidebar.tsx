@@ -18,6 +18,14 @@ import {
 } from "lucide-react";
 import { ROLE_STORAGE_KEY, useCampusRole } from "@/lib/useCampusRole";
 
+const SESSION_KEYS_TO_CLEAR = [
+  ROLE_STORAGE_KEY,
+  "campusos-student-name",
+  "campusos-campus-id",
+  "campusos-attendance-streak",
+  "campusos-rsvp-events",
+];
+
 const primaryNav = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Attendance", href: "/attendance", icon: QrCode },
@@ -39,7 +47,9 @@ export default function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
   const handleSignOut = () => {
     if (typeof window !== "undefined") {
-      window.localStorage.removeItem(ROLE_STORAGE_KEY);
+      for (const key of SESSION_KEYS_TO_CLEAR) {
+        window.localStorage.removeItem(key);
+      }
     }
 
     onClose?.();

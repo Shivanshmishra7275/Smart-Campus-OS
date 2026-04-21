@@ -231,7 +231,7 @@ export default function ComplaintsPage() {
   const handleResolveRisky = async () => {
     if (batchResolving) return;
 
-    const riskyOpenIds = visibleComplaints
+    const riskyOpenIds = enrichedComplaints
       .filter((item) => item.status === "Open" && item.slaHours >= 18)
       .map((item) => item.id);
 

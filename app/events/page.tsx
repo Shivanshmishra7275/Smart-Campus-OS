@@ -27,7 +27,7 @@ type CampusEvent = {
 
 const RSVP_KEY = "campusos-rsvp-events";
 const CUSTOM_EVENTS_KEY = "campusos-custom-events";
-const REFERENCE_NOW = new Date("2026-04-21T00:00:00").getTime();
+const FALLBACK_NOW = new Date("2026-04-21T00:00:00").getTime();
 
 const BASE_EVENTS: CampusEvent[] = [
   {
@@ -99,6 +99,7 @@ function hoursUntil(value: string, nowEpochMs: number) {
 
 export default function EventsPage() {
   const { role, ready: roleReady } = useCampusRole();
+  const [currentTime, setCurrentTime] = useState(0);
 
   const [events, setEvents] = useState<CampusEvent[]>(() => {
     if (typeof window === "undefined") return BASE_EVENTS;
@@ -143,10 +144,30 @@ export default function EventsPage() {
     window.localStorage.setItem(RSVP_KEY, JSON.stringify(rsvpIds));
   }, [rsvpIds]);
 
+  useEffect(() => {
+    const updateCurrentTime = () => {
+      setCurrentTime(Date.now());
+    };
+
+    updateCurrentTime();
+    const timerId = window.setInterval(updateCurrentTime, 60_000);
+
+    return () => window.clearInterval(timerId);
+  }, []);
+
+  const nowMs = currentTime || FALLBACK_NOW;
+
+  const displayedEvents = useMemo(() => {
+    return events.map((event) => ({
+      ...event,
+      registered: event.registered + (rsvpIds.includes(event.id) ? 1 : 0),
+    }));
+  }, [events, rsvpIds]);
+
   const visibleEvents = useMemo(() => {
     const lower = query.trim().toLowerCase();
 
-    return events
+    return displayedEvents
       .filter((event) => {
         const matchesType = typeFilter === "All" ? true : event.type === typeFilter;
         const matchesQuery =
@@ -159,16 +180,16 @@ export default function EventsPage() {
         return matchesType && matchesQuery;
       })
       .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
-  }, [events, query, typeFilter]);
+  }, [displayedEvents, query, typeFilter]);
 
   const stats = useMemo(() => {
-    const upcoming = events.filter((event) => new Date(event.startAt).getTime() > REFERENCE_NOW).length;
+    const upcoming = displayedEvents.filter((event) => new Date(event.startAt).getTime() > nowMs).length;
     const utilization =
-      events.length === 0
+      displayedEvents.length === 0
         ? 0
         : Math.round(
-            (events.reduce((sum, event) => sum + event.registered, 0) /
-              events.reduce((sum, event) => sum + event.capacity, 0)) *
+            (displayedEvents.reduce((sum, event) => sum + event.registered, 0) /
+              displayedEvents.reduce((sum, event) => sum + event.capacity, 0)) *
               100
           );
 
@@ -177,16 +198,16 @@ export default function EventsPage() {
       myRsvps: rsvpIds.length,
       utilization,
     };
-  }, [events, rsvpIds]);
+  }, [displayedEvents, nowMs, rsvpIds]);
 
   const nextEvent = useMemo(() => {
-    return [...events]
-      .filter((event) => new Date(event.startAt).getTime() > REFERENCE_NOW)
+    return [...displayedEvents]
+      .filter((event) => new Date(event.startAt).getTime() > nowMs)
       .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime())[0];
-  }, [events]);
+  }, [displayedEvents, nowMs]);
 
   const toggleRsvp = (eventId: string) => {
-    const targetEvent = events.find((event) => event.id === eventId);
+    const targetEvent = displayedEvents.find((event) => event.id === eventId);
     if (!targetEvent) return;
 
     const isRegistered = rsvpIds.includes(eventId);
@@ -195,18 +216,6 @@ export default function EventsPage() {
     if (!isRegistered && isFull) {
       return;
     }
-
-    setEvents((prev) =>
-      prev.map((event) => {
-        if (event.id !== eventId) return event;
-
-        if (isRegistered) {
-          return { ...event, registered: Math.max(0, event.registered - 1) };
-        }
-
-        return { ...event, registered: event.registered + 1 };
-      })
-    );
 
     setRsvpIds((prev) =>
       prev.includes(eventId) ? prev.filter((id) => id !== eventId) : [...prev, eventId]
@@ -386,9 +395,9 @@ export default function EventsPage() {
               <div className="mt-3 rounded-xl border border-slate-700/80 bg-slate-900/75 p-3">
                 <p className="text-sm font-semibold text-slate-100">{nextEvent.title}</p>
                 <p className="mt-1 text-xs text-slate-400">{nextEvent.venue}</p>
-                <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-cyan-500/50 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-100">
+                  <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-cyan-500/50 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-100">
                   <Ticket className="h-3.5 w-3.5" />
-                  Starts in ~{hoursUntil(nextEvent.startAt, REFERENCE_NOW)} hours
+                  Starts in ~{hoursUntil(nextEvent.startAt, nowMs)} hours
                 </p>
               </div>
             ) : (
